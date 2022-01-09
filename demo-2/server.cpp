@@ -27,12 +27,10 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
-#include <semaphore.h>
+#include <pthread.h>
 
 #define STR_CLOSE   "close"
 #define STR_QUIT    "quit"
-
-#define SEM_MUTEX_NAME      "/sem_mutex"
 
 //***************************************************************************
 // log messages
@@ -43,9 +41,6 @@
 
 // debug flag
 int g_debug = LOG_INFO;
-
-
-sem_t *g_sem_mutex = nullptr;
 
 void log_msg( int t_log_level, const char *t_form, ... )
 {
@@ -99,20 +94,41 @@ void help( int t_narg, char **t_args )
         g_debug = LOG_DEBUG;
 }
 
+//function called on thread create
+//***************************************************************************
+
+
+void* thread_function(void* par) 
+{
+    int current_socket = *(int*) par;
+
+    char buffer[128];
+
+    // read data from socket
+    int l_len = read( current_socket, buffer, sizeof( buffer ) );
+    if ( !l_len )
+    {
+            log_msg( LOG_DEBUG, "Client closed socket!" );
+            close( current_socket );
+    }
+    else if ( l_len < 0 )
+            log_msg( LOG_DEBUG, "Unable to read data from client." );
+    else
+            log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
+
+
+
+    // write data to client
+    l_len = send( current_socket, buffer, sizeof( buffer ) , 0);
+    if ( l_len < 0 )
+            log_msg( LOG_ERROR, "Unable to write data to stdout." );
+
+}
+
 //***************************************************************************
 
 int main( int t_narg, char **t_args )
 {
-
-    g_sem_mutex = sem_open( SEM_MUTEX_NAME, O_RDWR | O_CREAT, 0660, 1 );
-
-
-    if ( !g_sem_mutex )
-    {
-        log_msg( LOG_ERROR, "Unable to create two semaphores!" );
-        return 1;
-    }
-
     if ( t_narg <= 1 ) help( t_narg, t_args );
 
     int l_port = 0;
@@ -178,9 +194,6 @@ int main( int t_narg, char **t_args )
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
-
-
-
     // go!
     while ( 1 )
     {
@@ -193,8 +206,6 @@ int main( int t_narg, char **t_args )
         l_read_poll[ 0 ].events = POLLIN;
         l_read_poll[ 1 ].fd = l_sock_listen;
         l_read_poll[ 1 ].events = POLLIN;
-
-        int p_id;
 
         while ( 1 ) // wait for new client
         {
@@ -229,32 +240,47 @@ int main( int t_narg, char **t_args )
 
             if ( l_read_poll[ 1 ].revents & POLLIN )
             { // new client?
-                p_id = fork();
-
-                if(p_id == 0) 
+                sockaddr_in l_rsa;
+                int l_rsa_size = sizeof( l_rsa );
+                // new connection
+                l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
+                if ( l_sock_client == -1 )
                 {
-                    sockaddr_in l_rsa;
-                    int l_rsa_size = sizeof( l_rsa );
-                    // new connection
-                    l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
-                    if ( l_sock_client == -1 )
-                    {
-                            log_msg( LOG_ERROR, "Unable to accept new client." );
-                            close( l_sock_listen );
-                            exit( 1 );
-                    }
-                    uint l_lsa = sizeof( l_srv_addr );
-                    // my IP
-                    getsockname( l_sock_client, ( sockaddr * ) &l_srv_addr, &l_lsa );
-                    log_msg( LOG_INFO, "My IP: '%s'  port: %d",
-                                    inet_ntoa( l_srv_addr.sin_addr ), ntohs( l_srv_addr.sin_port ) );
-                    // client IP
-                    getpeername( l_sock_client, ( sockaddr * ) &l_srv_addr, &l_lsa );
-                    log_msg( LOG_INFO, "Client IP: '%s'  port: %d",
-                                    inet_ntoa( l_srv_addr.sin_addr ), ntohs( l_srv_addr.sin_port ) );
-
-                    break;
+                        log_msg( LOG_ERROR, "Unable to accept new client." );
+                        close( l_sock_listen );
+                        exit( 1 );
                 }
+                uint l_lsa = sizeof( l_srv_addr );
+                // my IP
+                getsockname( l_sock_client, ( sockaddr * ) &l_srv_addr, &l_lsa );
+                log_msg( LOG_INFO, "My IP: '%s'  port: %d",
+                                 inet_ntoa( l_srv_addr.sin_addr ), ntohs( l_srv_addr.sin_port ) );
+                // client IP
+                getpeername( l_sock_client, ( sockaddr * ) &l_srv_addr, &l_lsa );
+                log_msg( LOG_INFO, "Client IP: '%s'  port: %d",
+                                 inet_ntoa( l_srv_addr.sin_addr ), ntohs( l_srv_addr.sin_port ) );
+
+
+                                               
+                pthread_t single_thread;
+
+                int err = pthread_create( &single_thread, nullptr, thread_function, (void*)&l_sock_client );
+                if ( err )
+                    log_msg( LOG_INFO, "Unable to create thread.");
+                else
+                    log_msg( LOG_DEBUG, "Thread created");
+                
+
+                // close request?
+                if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
+                {
+                        log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
+                        close( l_sock_client );
+                        log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
+                        break;
+                }
+
+                break;
             }
 
         } // while wait for client
@@ -293,71 +319,28 @@ int main( int t_narg, char **t_args )
                         log_msg( LOG_DEBUG, "Sent %d bytes to client.", l_len );
             }
             // data from client?
-            if(p_id == 0) 
+            if ( l_read_poll[ 1 ].revents & POLLIN )
             {
-                if ( l_read_poll[ 1 ].revents & POLLIN )
+                    // threads creation
+              
+                pthread_t single_thread;
+
+                int err = pthread_create( &single_thread, nullptr, thread_function, (void*)&l_sock_client );
+                if ( err )
+                    log_msg( LOG_INFO, "Unable to create thread.");
+                else
+                    log_msg( LOG_DEBUG, "Thread created");
+                
+
+                // close request?
+                if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
                 {
-                    // read data from socket
-                    int l_len = read( l_sock_client, l_buf, sizeof( l_buf ) );
-                    if ( !l_len )
-                    {
-                            log_msg( LOG_DEBUG, "Client closed socket!" );
-                            close( l_sock_client );
-                            break;
-                    }
-                    else if ( l_len < 0 )
-                            log_msg( LOG_DEBUG, "Unable to read data from client." );
-                    else
-                            log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
-
-                    int return_number = strncmp(l_buf, "DOWN\n", 5);
-                    printf("result %d\n", g_sem_mutex);
-
-                    if(strncmp(l_buf, "DOWN\n", 5) == 0)
-                    {
-                        sem_wait( g_sem_mutex );
-
-                        // if ( sem_trywait( g_sem_mutex ) < 0 )
-                        // {
-                        //     log_msg( LOG_DEBUG,  "Critical section is occupied now. Wait for it ..." );
-
-                        //     if ( sem_wait( g_sem_mutex ) < 0 )
-                        //     {
-                        //         log_msg( LOG_ERROR, "Unable to enter into critical section!" );
-                        //         return 1;
-                        //     }
-                        // }
-
-                        write( l_sock_client, "DOWN-OK\n", l_len+3 );
-                    }
-                    else if(strncmp(l_buf, "UP\n", 3) == 0)
-                    {                  
-                        sem_post( g_sem_mutex );
-                        // if ( sem_post( g_sem_mutex ) < 0 )
-                        // {
-                        //     log_msg( LOG_ERROR, "Unable to unlock critical section!" );
-                        //     return 1;
-                        // }
-
-                        write( l_sock_client, "UP-OK\n", l_len+3 );
-
-                    }
-                    else 
-                    {
-                        l_len = write( l_sock_client, "ERR\n", 4 );
-                    }
-
-                    // close request?
-                    if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
-                    {
-                            log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
-                            close( l_sock_client );
-                            log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
-                            break;
-                    }
+                        log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
+                        close( l_sock_client );
+                        log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
+                        break;
                 }
             }
-            
             // request for quit
             if ( !strncasecmp( l_buf, "quit", strlen( STR_QUIT ) ) )
             {
@@ -371,3 +354,4 @@ int main( int t_narg, char **t_args )
 
     return 0;
 }
+
