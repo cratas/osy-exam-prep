@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #define STR_CLOSE   "close"
 #define STR_QUIT    "quit"
@@ -38,6 +39,12 @@
 #define LOG_ERROR               0       // errors
 #define LOG_INFO                1       // information and notifications
 #define LOG_DEBUG               2       // debug messages
+
+#define OK_MESSAGE              "OK\n"
+
+#define SEM_MUTEX_NAME      "/sem_mutex"
+
+sem_t *g_sem_mutex = nullptr;
 
 // debug flag
 int g_debug = LOG_INFO;
@@ -73,6 +80,7 @@ void log_msg( int t_log_level, const char *t_form, ... )
 //***************************************************************************
 // help
 
+
 void help( int t_narg, char **t_args )
 {
     if ( t_narg <= 1 || !strcmp( t_args[ 1 ], "-h" ) )
@@ -94,60 +102,55 @@ void help( int t_narg, char **t_args )
         g_debug = LOG_DEBUG;
 }
 
-//function called on thread create
 //***************************************************************************
 
 
-
-void* thread_function(void* parameter) 
+void* thread_function(void* p_socket)
 {
-    int socket = *(int*)parameter;
+    int socket = *(int*)p_socket;
+    char l_buf[255];
+    char length_buffer[32];
+    int message_length;
+    int accepter_chars_count=0;
 
-    char buffer[250];
 
-    
-
-    while(1)
+    int l_len = read( socket, length_buffer, sizeof( length_buffer ) );
+    if(l_len > 0)
     {
-            // read data from socket
-        int l_len = read( socket, buffer, sizeof( buffer ) );
-        if ( !l_len )
-        {
-                log_msg( LOG_DEBUG, "Client closed socket!" );
-                close( socket );
-                break;
-        }
-        else if ( l_len < 0 )
-                log_msg( LOG_DEBUG, "Unable to read data from client." );
-        else
-                log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
-
-        // write data to client
-        l_len = write( socket, buffer, sizeof(buffer) );
-        if ( l_len < 0 )
-                log_msg( LOG_ERROR, "Unable to write data to stdout." );
-
-        // close request?
-        if ( !strncasecmp( buffer, "close", strlen( STR_CLOSE ) ) )
-        {
-                log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
-                close( socket );
-                log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
-                break;
-        }
-
-        // request for quit
-        if ( !strncasecmp( buffer, "quit", strlen( STR_QUIT ) ) )
-        {
-            close( socket );
-            close( socket );
-            log_msg( LOG_INFO, "Request to 'quit' entered" );
-            exit( 0 );
-        }
+        write( socket, OK_MESSAGE, strlen(OK_MESSAGE) );
     }
 
-}
+    sscanf(length_buffer, "%d", &message_length);
+    printf("Message length: %d\n", message_length);
 
+    sem_wait(g_sem_mutex);
+
+    while(accepter_chars_count < message_length)
+    {
+        // read data from socket
+        accepter_chars_count += read( socket, l_buf, sizeof( l_buf ) );
+
+        char* token = NULL;
+
+        token = strtok(l_buf, "\n");
+
+        int row_number = 0;
+        while(token != NULL)
+        {
+            char result[64];
+
+            sprintf(result, "%d. %s\n", ++row_number, token);
+            write( socket, result, strlen(result) );
+            token = strtok(NULL, "\n");
+        }
+
+        sem_post(g_sem_mutex);
+        
+        break;
+    }
+    close( socket );
+
+}
 
 int main( int t_narg, char **t_args )
 {
@@ -216,35 +219,26 @@ int main( int t_narg, char **t_args )
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
+    g_sem_mutex = sem_open( SEM_MUTEX_NAME, O_RDWR | O_CREAT, 0660, 1 );
+    sem_init(g_sem_mutex, 1 ,1);
 
-
-
-    // go!
-    while ( 1 )
+    while(1)
     {
-        sockaddr_in new_socket_address;
-        socklen_t new_socket_size;
-
-        int l_sock_client = accept( l_sock_listen, ( struct sockaddr * ) &new_socket_address, ( socklen_t * ) &new_socket_size );
-        
-        if ( l_sock_client == -1 )
-        {
-            log_msg( LOG_ERROR, "Unable to accept new client." );
-            close( l_sock_listen );
-            exit( 1 );
-        }
+        sockaddr_in l_rsa;
+        int l_rsa_size = sizeof( l_rsa );
+        // new connection
+        int l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
 
 
-        pthread_t newThread;
+        pthread_t client_thread;
+        int err = pthread_create( &client_thread, nullptr, thread_function, (void*)&l_sock_client);
+        if ( err )
+            log_msg( LOG_INFO, "Unable to create thread");
+        else
+            log_msg( LOG_DEBUG, "Thread created");
+    }
 
-        if (pthread_create(&newThread, NULL, thread_function, (void*)&l_sock_client) != 0)
-        {
-            printf("Unable to create Client thread.\n");
-            exit(1);
-        }
-
-    } // while ( 1 )
+    close(l_sock_listen);
 
     return 0;
 }
-

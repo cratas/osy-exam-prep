@@ -27,7 +27,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
-#include <pthread.h>
 
 #define STR_CLOSE   "close"
 #define STR_QUIT    "quit"
@@ -94,60 +93,7 @@ void help( int t_narg, char **t_args )
         g_debug = LOG_DEBUG;
 }
 
-//function called on thread create
 //***************************************************************************
-
-
-
-void* thread_function(void* parameter) 
-{
-    int socket = *(int*)parameter;
-
-    char buffer[250];
-
-    
-
-    while(1)
-    {
-            // read data from socket
-        int l_len = read( socket, buffer, sizeof( buffer ) );
-        if ( !l_len )
-        {
-                log_msg( LOG_DEBUG, "Client closed socket!" );
-                close( socket );
-                break;
-        }
-        else if ( l_len < 0 )
-                log_msg( LOG_DEBUG, "Unable to read data from client." );
-        else
-                log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
-
-        // write data to client
-        l_len = write( socket, buffer, sizeof(buffer) );
-        if ( l_len < 0 )
-                log_msg( LOG_ERROR, "Unable to write data to stdout." );
-
-        // close request?
-        if ( !strncasecmp( buffer, "close", strlen( STR_CLOSE ) ) )
-        {
-                log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
-                close( socket );
-                log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
-                break;
-        }
-
-        // request for quit
-        if ( !strncasecmp( buffer, "quit", strlen( STR_QUIT ) ) )
-        {
-            close( socket );
-            close( socket );
-            log_msg( LOG_INFO, "Request to 'quit' entered" );
-            exit( 0 );
-        }
-    }
-
-}
-
 
 int main( int t_narg, char **t_args )
 {
@@ -216,35 +162,68 @@ int main( int t_narg, char **t_args )
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
-
-
+    int l_sock_client;
+    int p_id;
 
     // go!
     while ( 1 )
     {
-        sockaddr_in new_socket_address;
-        socklen_t new_socket_size;
-
-        int l_sock_client = accept( l_sock_listen, ( struct sockaddr * ) &new_socket_address, ( socklen_t * ) &new_socket_size );
+        char l_buf[ 256 ];
         
-        if ( l_sock_client == -1 )
+        sockaddr_in l_rsa;
+        int l_rsa_size = sizeof( l_rsa );
+        // new connection
+        l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
+
+        p_id = fork();
+
+        if(p_id == 0)
         {
-            log_msg( LOG_ERROR, "Unable to accept new client." );
-            close( l_sock_listen );
-            exit( 1 );
+            close(l_sock_listen);
+
+            while(1)
+            {
+                // read data from socket
+                int l_len = read( l_sock_client, l_buf, sizeof( l_buf ) );
+                if ( !l_len )
+                {
+                        log_msg( LOG_DEBUG, "Client closed socket!" );
+                        close( l_sock_client );
+                        break;
+                }
+                else if ( l_len < 0 )
+                        log_msg( LOG_DEBUG, "Unable to read data from client." );
+                else
+                        log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
+
+                int return_number = strncmp(l_buf, "DOWN\n", 5);
+
+                if(strncmp(l_buf, "DOWN\n", 5) == 0)
+                {
+                    write( l_sock_client, "DOWN-OK\n", l_len+3 );
+                }
+                else if(strncmp(l_buf, "UP\n", 3) == 0)
+                {                  
+                    write( l_sock_client, "UP-OK\n", l_len+3 );
+
+                }
+                else 
+                {
+                    l_len = write( l_sock_client, "ERR\n", 4 );
+                }
+
+                // close request?
+                if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
+                {
+                        log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
+                        close( l_sock_client );
+                        log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
+                        break;
+                }
+            }
         }
+    }
 
-
-        pthread_t newThread;
-
-        if (pthread_create(&newThread, NULL, thread_function, (void*)&l_sock_client) != 0)
-        {
-            printf("Unable to create Client thread.\n");
-            exit(1);
-        }
-
-    } // while ( 1 )
-
+    close(l_sock_client);
     return 0;
 }
-
