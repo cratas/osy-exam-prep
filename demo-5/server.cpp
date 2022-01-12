@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <wait.h>
+#include <semaphore.h>
 
 #define STR_CLOSE   "exit"
 #define STR_QUIT    "quit"
@@ -41,6 +42,10 @@
 #define LOG_ERROR               0       // errors
 #define LOG_INFO                1       // information and notifications
 #define LOG_DEBUG               2       // debug messages
+
+#define SEM_MUTEX_NAME      "/sem_mutexx"
+
+sem_t* g_sem_mutex;
 
 // debug flag
 int g_debug = LOG_INFO;
@@ -157,14 +162,16 @@ void* client_function(void* socket)
             dup2(pipefd[1], 2);  // send stderr to the pipe
 
             close(pipefd[1]);    // this descriptor is no longer needed
-
+            
+            sem_wait(g_sem_mutex);
             execvp(words[0], words);
+            
         }
         else
         {
             int l_status;
             waitpid( cmd_p_id, &l_status, 0 );
-
+            sem_post(g_sem_mutex);
             char output_buffer[255];
 
             close(pipefd[1]);  // close the write end of the pipe in the parent
@@ -173,19 +180,21 @@ void* client_function(void* socket)
             {
             }
 
+            char str[2] = "\0"; /* gives {\0, \0} */
+            str[0] = '\n';
     
+            strcat(output_buffer, str);
+
             // write data to client
             l_len = write( l_sock_client, output_buffer, strlen(output_buffer) );
             if ( l_len < 0 )
                     log_msg( LOG_ERROR, "Unable to write data to stdout." );
 
-            close(l_sock_client);
-            exit( 0 );
+            // close(l_sock_client);
+            // exit( 0 );
+            memset(output_buffer, 0, strlen(output_buffer));
+            bzero(l_buf, sizeof(l_buf));
         }
-
-        // l_len = write( l_sock_client, words[1], strlen(words[1]) );
-        // if ( l_len < 0 )
-        //         log_msg( LOG_ERROR, "Unable to write data to stdout." );
     }
 }
 
@@ -258,6 +267,9 @@ int main( int t_narg, char **t_args )
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
     int l_sock_client;
+
+    g_sem_mutex = sem_open( SEM_MUTEX_NAME, O_RDWR | O_CREAT, 0660, 1 );
+    sem_init(g_sem_mutex, 1 , 1);
 
     // go!
     while ( 1 )
