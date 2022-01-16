@@ -27,10 +27,11 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
-#include <wait.h>
 
 #define STR_CLOSE   "close"
 #define STR_QUIT    "quit"
+
+#define SHM_NAME        "/shm_example"
 
 //***************************************************************************
 // log messages
@@ -41,6 +42,14 @@
 
 // debug flag
 int g_debug = LOG_INFO;
+
+struct shm_data
+{
+  int num_of_process;
+  int counter;
+};
+
+shm_data *g_glb_data = nullptr;
 
 void log_msg( int t_log_level, const char *t_form, ... )
 {
@@ -99,10 +108,10 @@ void help( int t_narg, char **t_args )
 void* process_function(int l_sock_client)
 {
 
+
     while(1)
     {
-        char l_buf[255];
-
+        char l_buf[256];
         // read data from socket
         int l_len = read( l_sock_client, l_buf, sizeof( l_buf ) );
         if ( !l_len )
@@ -116,82 +125,23 @@ void* process_function(int l_sock_client)
         else
                 log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
 
+        // write data to client
+        l_len = write( l_sock_client, l_buf, l_len );
+        if ( l_len < 0 )
+                log_msg( LOG_ERROR, "Unable to write data to stdout." );
 
-        char get_string[32];
-        char command[32];
-        char http_string[32];
-        char rest[256];
-
-        sscanf(l_buf, "%[A-Za-z] /%[A-Za-z] %[A-Za-z]", get_string, command, http_string);
-
-
-        if(strncmp(get_string, "GET", 3) != 0 || strncmp(http_string, "HTTP", 4) != 0)
+        // close request?
+        if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
         {
-            close(l_sock_client);
-            break;
-        }
-        memset(l_buf, 0, sizeof(l_buf));
-
-        // int l_mypipe[ 2 ];
-        // if ( pipe( l_mypipe ) < 0 )
-        // {
-        //     log_msg( LOG_ERROR, "Unable to create pipe!" );
-        //     exit( 1 );
-        // }
-
-        int p_id = fork();
-
-        if(p_id == 0)
-        {
-            // close( l_mypipe[ 0 ] );
-
-            // dup2( l_mypipe[ 1 ], 1);
-            // dup2( l_mypipe[ 1 ], 2);
-
-            // dup2(STDOUT_FILENO, l_sock_client);
-            dup2 (l_sock_client, STDOUT_FILENO);
-            // close( l_mypipe[ 1 ] );
-            // dup2(STDOUT_FILENO, l_sock_client);
-            close(l_sock_client);
-            execlp(command, command, nullptr);
-
-            exit(1);
-        }
-        else
-        {
-            int l_status;
-            waitpid(p_id, &l_status, 0);
-
-            // printf("%s %s %s\n", get_string, command, http_string);
-    
-            // int err = read( l_mypipe[ 0 ], l_buf, sizeof( l_buf ) );
-            // if ( err < 0 )
-            // {
-            //     log_msg( LOG_ERROR, "Function read failed!" );
-            // }
-            // if ( err <= 0 )
-            // {
-            //     break;
-            // }
-
-            // printf("%s", l_buf);
-
-            // write data to client
-            // l_len = write( l_sock_client, l_buf, strlen(l_buf) );
-            // if ( l_len < 0 )
-            //         log_msg( LOG_ERROR, "Unable to write data to stdout." );
-
-            // close request?
-            if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
-            {
-                    log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
-                    close( l_sock_client );
-                    log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
-                    break;
-            }
+                log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
+                close( l_sock_client );
+                log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
+                break;
         }
 
+        bzero(l_buf, sizeof(l_buf));
     }
+
 }
 
 int main( int t_narg, char **t_args )
@@ -261,7 +211,27 @@ int main( int t_narg, char **t_args )
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
-    int l_sock_client;
+
+    int l_fd = shm_open( SHM_NAME, O_RDWR, 0660 );
+    if ( l_fd < 0 )
+    {
+        log_msg( LOG_ERROR, "Unable to open file for shared memory." );
+        l_fd = shm_open( SHM_NAME, O_RDWR | O_CREAT, 0660 );
+        if ( l_fd < 0 )
+        {
+            log_msg( LOG_ERROR, "Unable to create file for shared memory." );
+            exit( 1 );
+        }
+        ftruncate( l_fd, sizeof( shm_data ) );
+        log_msg( LOG_INFO, "File created, this process is first" );
+        l_first = 1;
+    }
+
+        // share memory allocation
+    g_glb_data = ( shm_data * ) mmap( nullptr, sizeof( shm_data ), PROT_READ | PROT_WRITE,
+    MAP_SHARED, l_fd, 0 );
+
+
 
     // go!
     while ( 1 )
@@ -269,22 +239,14 @@ int main( int t_narg, char **t_args )
         sockaddr_in l_rsa;
         int l_rsa_size = sizeof( l_rsa );
         // new connection
-        l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
-        if ( l_sock_client == -1 )
-        {
-                log_msg( LOG_ERROR, "Unable to accept new client." );
-                close( l_sock_listen );
-                exit( 1 );
-        }
+        int l_sock_client = accept( l_sock_listen, ( sockaddr * ) &l_rsa, ( socklen_t * ) &l_rsa_size );
 
         if(fork() == 0)
         {
-            // close(l_sock_listen);
+            close(l_sock_listen);
             process_function(l_sock_client);
         }
     } // while ( 1 )
-    close(l_sock_listen);
-
 
     return 0;
 }

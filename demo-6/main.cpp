@@ -14,54 +14,31 @@
 
 int main(int argc, char** argv )
 {
-    char* input_file_name = argv[1];
-    char* output_file_name = argv[2];
 
-    char* input_text;
-    FILE* fd;
+    FILE* fv = fopen(argv[1], "r");
 
-    fd = fopen(input_file_name, "rb");
-    if(!fd)
-    {
-        printf("Invalid input file. \n");
-        return 1;
-    }
+    char buffer[255];
 
-    fseek(fd, 0, SEEK_END);
-    int size_of_file = ftell(fd);
-    rewind(fd);
+    fseek(fv, 0, SEEK_END);
+    int file_size = ftell(fv);
+    rewind(fv);
 
-    input_text = (char*)malloc(size_of_file + 1);
+    int err = fread(buffer, 1, file_size, fv);
 
-    fread(input_text, size_of_file, 1, fd);
-    fclose(fd);
-
-    char* words[64];
+    char* token = strtok(buffer, " ");
+    
     int counter = 0;
-
-    char* token = strtok(input_text, " ");
-
+    fv = fopen(argv[2], "w");
 
     while(token != NULL)
     {
-        words[counter++] = token;
+        fprintf(fv, "%d. %s\n", ++counter, token);
         token = strtok(NULL, " ");
     }
-    
-    fd = fopen(output_file_name, "w");
-    if(!fd)
-    {
-        printf("Invalid output file. \n");
-        return 1;
-    }
+    fclose(fv);
 
-    for(int i = 0; i < counter; i++)
-    {
-        fprintf(fd, "%d. %s\n", i+1, words[i]);
-    }
-
-    fclose(fd);
-    free(token);
+    for(int i=0; i<10;i++) 
+    {}
 
     return 0;
 }

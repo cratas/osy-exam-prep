@@ -96,19 +96,19 @@ void help( int t_narg, char **t_args )
 
 //***************************************************************************
 
-void* process_function(int l_sock_client)
-{
 
+void* process_function(int* l_sock_client)
+{
     while(1)
-    {
+    {   
         char l_buf[255];
 
         // read data from socket
-        int l_len = read( l_sock_client, l_buf, sizeof( l_buf ) );
+        int l_len = read( *l_sock_client, l_buf, sizeof( l_buf ) );
         if ( !l_len )
         {
                 log_msg( LOG_DEBUG, "Client closed socket!" );
-                close( l_sock_client );
+                close( *l_sock_client );
                 break;
         }
         else if ( l_len < 0 )
@@ -116,81 +116,65 @@ void* process_function(int l_sock_client)
         else
                 log_msg( LOG_DEBUG, "Read %d bytes from client.", l_len );
 
+        // size_t len = strlen(l_buf);
+        // if (l_buf[len - 1] == '\n') 
+        //     l_buf[len -1] = '\0';
 
-        char get_string[32];
-        char command[32];
-        char http_string[32];
-        char rest[256];
+        char* words[255];
 
-        sscanf(l_buf, "%[A-Za-z] /%[A-Za-z] %[A-Za-z]", get_string, command, http_string);
+        char* token = strtok(l_buf, " \n");
 
-
-        if(strncmp(get_string, "GET", 3) != 0 || strncmp(http_string, "HTTP", 4) != 0)
+        int counter;
+        while(token != NULL)
         {
-            close(l_sock_client);
-            break;
+            words[counter++] = token;
+            token = strtok(NULL, " \n");
         }
-        memset(l_buf, 0, sizeof(l_buf));
 
-        // int l_mypipe[ 2 ];
-        // if ( pipe( l_mypipe ) < 0 )
-        // {
-        //     log_msg( LOG_ERROR, "Unable to create pipe!" );
-        //     exit( 1 );
-        // }
-
+        // printf("%s\n", words[--counter]);
+        
+        int l_pipe[2];
+        pipe(l_pipe);
         int p_id = fork();
 
         if(p_id == 0)
         {
-            // close( l_mypipe[ 0 ] );
+            close(l_pipe[0]);
+            dup2(l_pipe[1], STDOUT_FILENO);
 
-            // dup2( l_mypipe[ 1 ], 1);
-            // dup2( l_mypipe[ 1 ], 2);
-
-            // dup2(STDOUT_FILENO, l_sock_client);
-            dup2 (l_sock_client, STDOUT_FILENO);
-            // close( l_mypipe[ 1 ] );
-            // dup2(STDOUT_FILENO, l_sock_client);
-            close(l_sock_client);
-            execlp(command, command, nullptr);
+            // execvp(words[0], words);
+            execlp(words[0], words[0], words[--counter], NULL);
+            
+            close(l_pipe[1]);
 
             exit(1);
         }
         else
         {
-            int l_status;
-            waitpid(p_id, &l_status, 0);
+            int status;
+            waitpid(p_id, &status, 0);
+            char buffer[255];
 
-            // printf("%s %s %s\n", get_string, command, http_string);
-    
-            // int err = read( l_mypipe[ 0 ], l_buf, sizeof( l_buf ) );
-            // if ( err < 0 )
-            // {
-            //     log_msg( LOG_ERROR, "Function read failed!" );
-            // }
-            // if ( err <= 0 )
-            // {
-            //     break;
-            // }
-
-            // printf("%s", l_buf);
+            read(l_pipe[0], buffer, sizeof(buffer));            
 
             // write data to client
-            // l_len = write( l_sock_client, l_buf, strlen(l_buf) );
-            // if ( l_len < 0 )
-            //         log_msg( LOG_ERROR, "Unable to write data to stdout." );
+            l_len = write( *l_sock_client, buffer, strlen(buffer) );
+            if ( l_len < 0 )
+                    log_msg( LOG_ERROR, "Unable to write data to stdout." );
 
             // close request?
             if ( !strncasecmp( l_buf, "close", strlen( STR_CLOSE ) ) )
             {
                     log_msg( LOG_INFO, "Client sent 'close' request to close connection." );
-                    close( l_sock_client );
+                    close( *l_sock_client );
                     log_msg( LOG_INFO, "Connection closed. Waiting for new client." );
                     break;
             }
-        }
 
+            memset(buffer, 0, sizeof(buffer));
+            memset(l_buf, 0, sizeof(l_buf));
+        }
+        
     }
 }
 
@@ -261,11 +245,11 @@ int main( int t_narg, char **t_args )
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
 
-    int l_sock_client;
-
     // go!
     while ( 1 )
     {
+        int l_sock_client = -1;
+
         sockaddr_in l_rsa;
         int l_rsa_size = sizeof( l_rsa );
         // new connection
@@ -279,12 +263,11 @@ int main( int t_narg, char **t_args )
 
         if(fork() == 0)
         {
-            // close(l_sock_listen);
-            process_function(l_sock_client);
+            close(l_sock_listen);
+            process_function(&l_sock_client);
         }
-    } // while ( 1 )
-    close(l_sock_listen);
 
+    } // while ( 1 )
 
     return 0;
 }

@@ -1,0 +1,8 @@
+server prijme n klientu a kazemu z nich vytvori novy proces
+
+klient pristoupi ke sdilene pameti, pokud je cislo ve sdilene pameti sude, vydeli jej 2 a zapise
+    -pokud je cislo liche vynasobi cislo 2 a zapise
+    -klient bude vypisovat cislo pred a po operaci
+
+ke sdilene pameti muze pristupovat prave jeden klient  
+    -osetrete pomoci semaforu
