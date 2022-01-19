@@ -147,7 +147,7 @@ void* thread_function(void* socket)
     {
         char l_buf[256];
         
-                // read data from socket
+        // read data from socket
         int l_len = read( l_sock_client, l_buf, sizeof( l_buf ) );
         if ( !l_len )
         {
@@ -219,7 +219,6 @@ void* thread_function(void* socket)
         memset(l_buf, 0, sizeof(l_buf));
     }
 
-    // close(l_sock_client);
     return nullptr;
 }
 
@@ -303,7 +302,6 @@ int main( int t_narg, char **t_args )
 
     sem_init(g_sem_mutex, 1, 1);
 
-    // go!
     while ( 1 )
     {
         sockaddr_in l_rsa;
